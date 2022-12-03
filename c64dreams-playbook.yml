@@ -1,0 +1,107 @@
+- name: C64 Dreams
+  hosts: localhost
+  connection: local
+
+  vars:
+    python_executable: "{{ ansible_facts['python']['executable'] }}"
+    #
+    c64dreams_archive:
+      url: https://archive.org/download/c64-dreams-v0.45/C64%20Dreams%20v0.45.7z
+      checksum: sha1:04d91d294ddec1ac8ec87cc5a0cff364b16d4c9a
+    #
+    download_file: "{{ playbook_dir }}/{{ c64dreams_archive.url | basename | urldecode }}"
+    extraction_dir: "{{ playbook_dir }}/{{ download_file | basename | splitext | first }}"
+    #
+    output_dir: "{{ playbook_dir }}/output"
+    metadata_file: "{{ output_dir }}/metadata.json"
+    feh_list_file: "{{ output_dir }}/feh_filelist.txt"
+    feh_last_viewed_file: "{{ output_dir }}/feh_last_viewed.txt"
+
+  tasks:
+    - name: install packages
+      package:
+        name:
+          - p7zip-full
+          - feh
+          - vice
+
+    - name: check archive file extension
+      assert:
+        that: download_file is match(".*.7z$")
+
+    - name: download archive
+      get_url:
+        url: "{{ c64dreams_archive.url }}"
+        dest: "{{ download_file }}"
+        checksum: "{{ c64dreams_archive.checksum }}"
+
+    - name: create extraction dir
+      file:
+        path: "{{ extraction_dir }}"
+        state: directory
+      register: extraction_dir_reg
+    
+    - name: extract
+      shell:
+        chdir: "{{ playbook_dir }}"
+        cmd: >
+          7z x
+          -o"{{ extraction_dir }}"
+          -y
+          "{{ download_file }}"
+      when: extraction_dir_reg is changed
+
+    - name: create output dirs
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ output_dir }}"
+        - "{{ output_dir }}/img"
+
+    - name: create metadata file
+      shell:
+        chdir: "{{ playbook_dir }}/tools"
+        cmd: "{{ python_executable }} create_metadata.py '{{ extraction_dir }}'"
+        creates: "{{ metadata_file }}"
+
+    - name: create 'feh' filelist
+      shell:
+        chdir: "{{ playbook_dir }}/tools"
+        cmd: "{{ python_executable }} create_feh_filelist.py"
+        creates: "{{ feh_list_file }}"
+
+    - name: create run script
+      copy:
+        content: |
+          #!/bin/bash
+          feh \
+          --hide-pointer \
+          --fullscreen \
+          --auto-zoom \
+          --draw-actions \
+          --draw-tinted \
+          --on-last-slide hold \
+          --start-at "$(cat '{{ feh_last_viewed_file }}' || head -n 1 '{{ feh_list_file }}')" \
+          --action  ';[RUN]      {{ python_executable }} "{{ playbook_dir }}/tools/feh_action.py" %F run_game' \
+          --action1 ';[MANUAL]   {{ python_executable }} "{{ playbook_dir }}/tools/feh_action.py" %F show_manual' \
+          --action2 ';[FOLDER]   {{ python_executable }} "{{ playbook_dir }}/tools/feh_action.py" %F open_game_folder' \
+          --action3 ';[WIKIPEDIA]{{ python_executable }} "{{ playbook_dir }}/tools/feh_action.py" %F search_wikipedia' \
+          --info    '{{ python_executable }} "{{ playbook_dir }}/tools/feh_info.py" %F' \
+          --filelist - < "{{ feh_list_file }}"
+        dest: "{{ output_dir }}/run.sh"
+        mode: "0744"
+
+    - name: create desktop launcher
+      copy:
+        content: |
+          #!/usr/bin/env xdg-open
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Terminal=false
+          Exec={{ output_dir }}/run.sh
+          Name=C64 Dreams
+          Comment=Are you keeping up with the Commodore?
+          Icon={{ extraction_dir }}/C64 Dreams/Images/Platforms/C64 Dreams/Clear Logo/C64 Dreams.png
+        dest: "{{ output_dir }}/c64dreams.desktop"
