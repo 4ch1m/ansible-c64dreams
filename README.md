@@ -1,5 +1,5 @@
 # Ansible-C64Dreams
-> A helper script to obtain and enjoy the _C64 Dreams_ project on Linux.
+> An automated setup for the _C64 Dreams_ project on Linux.
 
 Table of Contents
 =================
