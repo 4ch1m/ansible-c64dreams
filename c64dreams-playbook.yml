@@ -6,73 +6,101 @@
     python_executable: "{{ ansible_facts['python']['executable'] }}"
     #
     c64dreams_archive:
-      url: https://archive.org/download/c64-dreams-v0.45/C64%20Dreams%20v0.45.7z
-      checksum: sha1:04d91d294ddec1ac8ec87cc5a0cff364b16d4c9a
+      url: https://archive.org/download/c64-dreams-v0.60/C64%20Dreams%20v0.60.7z
+      checksum: sha1:cdaa75f5c4e206fa910e97534be1fe23ea72d9a7
+    c64dreams_hotfix:
+      - url: https://archive.org/download/c64-dreams-v0.60/C64%20Dreams%20v0.60%20Hotfix%206-5-2023.7z
+        checksum: sha1:4a0396efb4874f30479d430e7fe04d9bf665574d
     #
-    download_file: "{{ playbook_dir }}/{{ c64dreams_archive.url | basename | urldecode }}"
-    extraction_dir: "{{ playbook_dir }}/{{ download_file | basename | splitext | first }}"
-    #
+    extraction_dir: "{{ playbook_dir }}/{{ c64dreams_archive.url | basename | urldecode | splitext | first }}"
     output_dir: "{{ playbook_dir }}/output"
     metadata_file: "{{ output_dir }}/metadata.json"
     feh_list_file: "{{ output_dir }}/feh_filelist.txt"
     feh_last_viewed_file: "{{ output_dir }}/feh_last_viewed.txt"
 
   tasks:
-    - name: install packages
-      package:
+    - name: Install packages
+      become: true
+      ansible.builtin.package:
         name:
           - p7zip-full
           - feh
           - vice
 
-    - name: check archive file extension
-      assert:
-        that: download_file is match(".*.7z$")
+    - name: Check file extension(s)
+      ansible.builtin.assert:
+        that: item is match(".*.7z$")
+        quiet: true
+      loop: "{{ [c64dreams_archive.url] + (c64dreams_hotfix | default([]) | map(attribute='url') | list) }}"
+      loop_control:
+        label: "{{ item | basename | urldecode }}"
 
-    - name: download archive
-      get_url:
-        url: "{{ c64dreams_archive.url }}"
-        dest: "{{ download_file }}"
-        checksum: "{{ c64dreams_archive.checksum }}"
+    - name: Download file(s)
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ playbook_dir }}/{{ item.url | basename | urldecode }}"
+        checksum: "{{ item.checksum }}"
+        mode: "0644"
+      loop: "{{ [c64dreams_archive] + (c64dreams_hotfix | default([])) }}"
+      loop_control:
+        label: "{{ item.url | basename | urldecode }}"
 
-    - name: create extraction dir
-      file:
+    - name: Create extraction dir
+      ansible.builtin.file:
         path: "{{ extraction_dir }}"
         state: directory
+        mode: "0755"
       register: extraction_dir_reg
-    
-    - name: extract
-      shell:
-        chdir: "{{ playbook_dir }}"
-        cmd: >
-          7z x
-          -o"{{ extraction_dir }}"
-          -y
-          "{{ download_file }}"
-      when: extraction_dir_reg is changed
 
-    - name: create output dirs
-      file:
+    - name: Create output dirs
+      ansible.builtin.file:
         path: "{{ item }}"
         state: directory
+        mode: "0755"
       loop:
         - "{{ output_dir }}"
         - "{{ output_dir }}/img"
 
-    - name: create metadata file
-      shell:
+    - name: Extract and clean up
+      when: extraction_dir_reg is changed
+      block:
+        - name: Extract files # noqa: no-handler
+          ansible.builtin.shell:
+            cmd: >
+              7z x
+              -o"{{ extraction_dir }}"
+              -y
+              "{{ playbook_dir }}/{{ item.url | basename | urldecode }}"
+          loop: "{{ [c64dreams_archive] + (c64dreams_hotfix | default([])) }}"
+          loop_control:
+            label: "{{ item.url | basename | urldecode }}"
+          changed_when: false
+
+        - name: Remove outdated files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ metadata_file }}"
+            - "{{ feh_list_file }}"
+            - "{{ feh_last_viewed_file }}"
+          loop_control:
+            label: "{{ item | basename }}"
+
+    - name: Create metadata file
+      ansible.builtin.command:
         chdir: "{{ playbook_dir }}/tools"
         cmd: "{{ python_executable }} create_metadata.py '{{ extraction_dir }}'"
         creates: "{{ metadata_file }}"
 
-    - name: create 'feh' filelist
-      shell:
+    - name: Create 'feh' filelist
+      ansible.builtin.command:
         chdir: "{{ playbook_dir }}/tools"
         cmd: "{{ python_executable }} create_feh_filelist.py"
         creates: "{{ feh_list_file }}"
 
-    - name: create run script
-      copy:
+    - name: Create run script
+      ansible.builtin.copy:
         content: |
           #!/bin/bash
           feh \
@@ -92,8 +120,8 @@
         dest: "{{ output_dir }}/run.sh"
         mode: "0744"
 
-    - name: create desktop launcher
-      copy:
+    - name: Create desktop launcher
+      ansible.builtin.copy:
         content: |
           #!/usr/bin/env xdg-open
           [Desktop Entry]
@@ -105,3 +133,4 @@
           Comment=Are you keeping up with the Commodore?
           Icon={{ extraction_dir }}/C64 Dreams/Images/Platforms/C64 Dreams/Clear Logo/C64 Dreams.png
         dest: "{{ output_dir }}/c64dreams.desktop"
+        mode: "0755"

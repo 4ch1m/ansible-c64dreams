@@ -1,5 +1,6 @@
-.idea
+.idea/
 *.iml
 *.7z
-C64 Dreams*
-output
+C64 Dreams*/
+output/
+.ansible-lint
